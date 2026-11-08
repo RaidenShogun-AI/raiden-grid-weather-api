@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Raiden Grid &amp; Weather Telemetry API</title>
+  <style>
+    :root {
+      --bg: #0b0e17;
+      --card: #131826;
+      --border: #262f47;
+      --accent: #a855f7;
+      --accent-glow: #7e22ce;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --low: #10b981;
+      --moderate: #f59e0b;
+      --high: #f97316;
+      --critical: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top right, #1e1b4b, var(--bg) 50%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.5rem;
+      line-height: 1.5;
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+      padding-bottom: 1.25rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1.5rem;
+    }
+    .title-group h1 {
+      font-size: 1.55rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .title-group p { color: var(--muted); font-size: 0.9rem; }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    input[type="text"] {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 0.5rem 0.85rem;
+      border-radius: 0.5rem;
+      font-size: 0.9rem;
+    }
+    button, .btn-link {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.5rem 0.95rem;
+      border-radius: 0.5rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    button.secondary, .btn-link.secondary {
+      background: #1e293b;
+      border: 1px solid var(--border);
+    }
+    button:hover, .btn-link:hover { opacity: 0.9; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 1.25rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      padding: 1.25rem;
+    }
+    .card h2 {
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      margin-bottom: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .big-stat {
+      font-size: 2.3rem;
+      font-weight: 800;
+      margin: 0.25rem 0;
+    }
+    .badge {
+      padding: 0.2rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+    .badge.LOW { background: rgba(16, 185, 129, 0.18); color: var(--low); }
+    .badge.MODERATE { background: rgba(245, 158, 11, 0.18); color: var(--moderate); }
+    .badge.HIGH { background: rgba(249, 115, 22, 0.18); color: var(--high); }
+    .badge.CRITICAL { background: rgba(239, 68, 68, 0.18); color: var(--critical); }
+    .kv-list { list-style: none; font-size: 0.9rem; }
+    .kv-list li {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.35rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .kv-list li span:first-child { color: var(--muted); }
+    .factor-row {
+      margin-bottom: 0.85rem;
+      padding-bottom: 0.65rem;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .factor-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.25rem;
+    }
+    .bar-bg {
+      height: 6px;
+      background: #1e293b;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 0.3rem;
+    }
+    .bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), #ec4899);
+    }
+    .timeline {
+      display: flex;
+      gap: 0.6rem;
+      overflow-x: auto;
+      padding-bottom: 0.5rem;
+    }
+    .hour-box {
+      min-width: 105px;
+      background: #0f1420;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.65rem;
+      font-size: 0.82rem;
+    }
+    .news-item {
+      padding: 0.6rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      font-size: 0.88rem;
+    }
+    .news-item a { color: #c084fc; text-decoration: none; font-weight: 600; }
+    .news-item a:hover { text-decoration: underline; }
+    .news-meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.2rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>⚡ Raiden Grid &amp; Weather Telemetry REST API</h1>
+        <p>Real-Time Device Location • Meteorological Stress • Public Outage Intelligence &amp; 24h Power-Cut Predictions</p>
+      </div>
+      <div class="controls">
+        <input type="text" id="cityInput" placeholder="Override city (e.g. Gampaha, Colombo)" />
+        <button onclick="loadByCity()">Query City</button>
+        <button class="secondary" onclick="loadAutoIp()">Auto Laptop IP</button>
+        <button class="secondary" onclick="loadBrowserGps()">Browser GPS</button>
+        <a class="btn-link secondary" href="/docs" target="_blank">OpenAPI / Swagger Docs</a>
+      </div>
+    </header>
+
+    <div id="statusBanner" style="margin-bottom: 1rem; color: var(--muted); font-size: 0.9rem;">
+      Fetching live laptop location, weather, and grid outage telemetry...
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>
+          <span>📍 Detected Device Location</span>
+          <span id="locMethod" style="font-size: 0.75rem; color: var(--accent);"></span>
+        </h2>
+        <div class="big-stat" id="locCity">--</div>
+        <ul class="kv-list">
+          <li><span>Region / Province</span><span id="locRegion">--</span></li>
+          <li><span>District / Suburb</span><span id="locDistrict">--</span></li>
+          <li><span>Coordinates</span><span id="locCoords">--</span></li>
+          <li><span>ISP / Network</span><span id="locIsp">--</span></li>
+          <li><span>Timezone</span><span id="locTz">--</span></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>
+          <span>⛈️ Current Weather</span>
+          <span id="wObsTime" style="font-size: 0.75rem;"></span>
+        </h2>
+        <div class="big-stat" id="wTemp">--°C</div>
+        <div id="wCondition" style="color: #c084fc; font-weight: 600; margin-bottom: 0.5rem;">--</div>
+        <ul class="kv-list">
+          <li><span>Feels Like / Humidity</span><span id="wHum">--</span></li>
+          <li><span>Wind Speed / Gusts</span><span id="wWind">--</span></li>
+          <li><span>Precipitation</span><span id="wRain">--</span></li>
+          <li><span>Storm Energy (CAPE)</span><span id="wCape">--</span></li>
+          <li><span>Pressure / Cloud Cover</span><span id="wPress">--</span></li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>
+          <span>⚡ Power Cut Possibility</span>
+          <span class="badge" id="riskBadge">--</span>
+        </h2>
+        <div class="big-stat" id="outageProb">--%</div>
+        <p id="outageSummary" style="font-size: 0.85rem; color: var(--muted); margin-bottom: 0.75rem;"></p>
+        <ul class="kv-list">
+          <li><span>Peak 24h Risk</span><span id="peak24h">--</span></li>
+          <li><span>Utility Provider</span><span id="utilityName">--</span></li>
+          <li><span>Emergency Hotline</span><span id="utilityHotline">--</span></li>
+          <li><span>Peak Demand Now</span><span id="peakNow">--</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>📊 Multi-Factor Outage Risk Breakdown</h2>
+        <div id="factorsContainer"></div>
+      </div>
+
+      <div class="card">
+        <h2>📰 Public Knowledge &amp; Google News Outage Advisories</h2>
+        <div id="newsContainer"></div>
+        <h2 style="margin-top: 1.25rem;">🛡️ Recommendations</h2>
+        <ul id="recsContainer" style="padding-left: 1.2rem; font-size: 0.88rem; color: var(--text);"></ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 1.5rem;">
+      <h2>🕒 24-Hour Power Cut Possibility Prediction Timeline</h2>
+      <div class="timeline" id="timelineContainer"></div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchTelemetry(queryString = '') {
+      const banner = document.getElementById('statusBanner');
+      banner.textContent = 'Querying /api/v1/status' + queryString + ' ...';
+      try {
+        const res = await fetch('/api/v1/status' + queryString);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+        renderTelemetry(data);
+        banner.textContent = 'Live telemetry updated at ' + new Date().toLocaleTimeString() + ' — Endpoint: /api/v1/status' + queryString;
+      } catch (err) {
+        banner.textContent = 'Error loading telemetry: ' + err.message;
+      }
+    }
+
+    function renderTelemetry(data) {
+      const loc = data.location;
+      const cur = data.weather.current;
+      const pred = data.power_cut_prediction;
+
+      document.getElementById('locCity').textContent = `${loc.city}, ${loc.country_code}`;
+      document.getElementById('locMethod').textContent = loc.detection_method;
+      document.getElementById('locRegion').textContent = `${loc.region} (${loc.country})`;
+      document.getElementById('locDistrict').textContent = loc.district_or_suburb || 'N/A';
+      document.getElementById('locCoords').textContent = `${loc.latitude.toFixed(4)}, ${loc.longitude.toFixed(4)}`;
+      document.getElementById('locIsp').textContent = loc.isp || loc.ip_address || 'Local';
+      document.getElementById('locTz').textContent = loc.timezone;
+
+      document.getElementById('wTemp').textContent = `${cur.temperature_c.toFixed(1)}°C`;
+      document.getElementById('wObsTime').textContent = cur.observation_time;
+      document.getElementById('wCondition').textContent = cur.condition_text;
+      document.getElementById('wHum').textContent = `${cur.feels_like_c.toFixed(1)}°C / ${cur.humidity_percent}%`;
+      document.getElementById('wWind').textContent = `${cur.wind_speed_kmh} km/h (gusts ${cur.wind_gusts_kmh} km/h)`;
+      document.getElementById('wRain').textContent = `${cur.precipitation_mm} mm`;
+      document.getElementById('wCape').textContent = `${cur.cape_j_kg} J/kg`;
+      document.getElementById('wPress').textContent = `${cur.pressure_hpa} hPa / ${cur.cloud_cover_percent}%`;
+
+      document.getElementById('outageProb').textContent = `${pred.outage_probability_percent}%`;
+      const badge = document.getElementById('riskBadge');
+      badge.textContent = pred.risk_level;
+      badge.className = 'badge ' + pred.risk_level;
+      document.getElementById('outageSummary').textContent = pred.summary;
+      document.getElementById('peak24h').textContent = `${pred.peak_24h_probability_percent}% (${(pred.highest_risk_hour || '').split('T')[1] || ''})`;
+      document.getElementById('utilityName').textContent = pred.utility_grid.primary_utility;
+      document.getElementById('utilityHotline').textContent = pred.utility_grid.emergency_hotline;
+      document.getElementById('peakNow').textContent = pred.utility_grid.is_peak_demand_now ? 'YES (Peak Load)' : 'No (Off-Peak)';
+
+      const factorsEl = document.getElementById('factorsContainer');
+      factorsEl.innerHTML = pred.risk_factors.map(f => {
+        const pct = Math.min(100, (f.score_contribution / f.max_possible_score) * 100);
+        return `
+          <div class="factor-row">
+            <div class="factor-header">
+              <span>${f.factor_name}</span>
+              <span>+${f.score_contribution} / ${f.max_possible_score} pts (${f.severity})</span>
+            </div>
+            <div class="bar-bg"><div class="bar-fill" style="width:${pct}%"></div></div>
+            <div style="font-size:0.8rem;color:var(--muted);">${f.explanation}</div>
+          </div>
+        `;
+      }).join('');
+
+      const newsEl = document.getElementById('newsContainer');
+      if (!pred.public_outage_advisories || pred.public_outage_advisories.length === 0) {
+        newsEl.innerHTML = '<div style="font-size:0.86rem;color:var(--muted);">No urgent outage bulletins found in recent public news feeds.</div>';
+      } else {
+        newsEl.innerHTML = pred.public_outage_advisories.slice(0, 5).map(n => `
+          <div class="news-item">
+            <a href="${n.link}" target="_blank" rel="noopener">${n.title}</a>
+            <div class="news-meta">${n.source || 'News'} • ${n.published_at || ''} ${n.is_local_match ? '• 🎯 Local Match' : ''}</div>
+          </div>
+        `).join('');
+      }
+
+      const recsEl = document.getElementById('recsContainer');
+      recsEl.innerHTML = pred.recommendations.map(r => `<li style="margin-bottom:0.35rem;">${r}</li>`).join('');
+
+      const timelineEl = document.getElementById('timelineContainer');
+      timelineEl.innerHTML = pred.hourly_predictions_24h.map(h => {
+        const tLabel = (h.time.split('T')[1] || h.time);
+        return `
+          <div class="hour-box">
+            <div style="font-weight:700;margin-bottom:0.2rem;">${tLabel}</div>
+            <div class="badge ${h.risk_level}" style="display:inline-block;margin-bottom:0.3rem;">${h.outage_probability_percent}%</div>
+            <div style="color:var(--muted);font-size:0.75rem;">${h.weather_condition}</div>
+            <div style="color:var(--muted);font-size:0.73rem;">Gust: ${h.wind_gusts_kmh} km/h</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function loadAutoIp() { fetchTelemetry(''); }
+    function loadByCity() {
+      const c = document.getElementById('cityInput').value.trim();
+      if (c) fetchTelemetry('?city=' + encodeURIComponent(c));
+    }
+    function loadBrowserGps() {
+      if (!navigator.geolocation) {
+        alert('Geolocation is not supported by this browser.');
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        pos => fetchTelemetry(`?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`),
+        err => alert('Could not obtain browser GPS: ' + err.message)
+      );
+    }
+
+    loadAutoIp();
+  </script>
+</body>
+</html>

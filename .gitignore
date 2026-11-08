@@ -1,0 +1,19 @@
+# Python virtual environment & bytecode
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment variables
+.env
+.env.local
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
