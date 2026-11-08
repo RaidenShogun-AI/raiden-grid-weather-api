@@ -168,6 +168,15 @@
     .news-item a { color: #c084fc; text-decoration: none; font-weight: 600; }
     .news-item a:hover { text-decoration: underline; }
     .news-meta { color: var(--muted); font-size: 0.78rem; margin-top: 0.2rem; }
+    .alert-toast {
+      display: none;
+      background: rgba(168, 85, 247, 0.18);
+      border: 1px solid var(--accent);
+      border-radius: 0.6rem;
+      padding: 0.85rem 1rem;
+      margin-bottom: 1.25rem;
+      font-size: 0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -175,7 +184,7 @@
     <header>
       <div class="title-group">
         <h1>⚡ Raiden Grid &amp; Weather Telemetry REST API</h1>
-        <p>Real-Time Device Location • Meteorological Stress • Public Outage Intelligence &amp; 24h Power-Cut Predictions</p>
+        <p>Real-Time Device Location • Meteorological Stress • Public Outage Intelligence • Nearby Device Broadcast</p>
       </div>
       <div class="controls">
         <input type="text" id="cityInput" placeholder="Override city (e.g. Gampaha, Colombo)" />
@@ -185,6 +194,8 @@
         <a class="btn-link secondary" href="/docs" target="_blank">OpenAPI / Swagger Docs</a>
       </div>
     </header>
+
+    <div id="liveAlertBanner" class="alert-toast"></div>
 
     <div id="statusBanner" style="margin-bottom: 1rem; color: var(--muted); font-size: 0.9rem;">
       Fetching live laptop location, weather, and grid outage telemetry...
@@ -236,6 +247,22 @@
           <li><span>Peak Demand Now</span><span id="peakNow">--</span></li>
         </ul>
       </div>
+    </div>
+
+    <!-- Nearby Devices & Broadcast Card -->
+    <div class="card" style="margin-bottom: 1.25rem;">
+      <h2>
+        <span>📡 Nearby Devices Discovery &amp; Multi-Channel Alert Broadcast</span>
+        <span id="hostLanIp" style="font-size: 0.78rem; color: var(--accent);"></span>
+      </h2>
+      <div style="display:flex; flex-wrap:wrap; gap:0.65rem; margin-bottom:1rem; align-items:center;">
+        <input type="text" id="customAlertMsg" placeholder="Optional custom broadcast message..." style="flex:1; min-width:220px;" />
+        <button onclick="broadcastNearbyAlert()">⚡ Broadcast Alert to Nearby Devices</button>
+        <button class="secondary" onclick="enableBrowserNotifications()">🔔 Enable Browser Push Alerts</button>
+        <button class="secondary" onclick="loadNearbyDevices()">🔄 Scan Nearby Devices</button>
+      </div>
+      <div id="broadcastReport" style="font-size:0.84rem; color:#c084fc; margin-bottom:0.75rem;"></div>
+      <div id="nearbyDevicesList" style="font-size:0.86rem; color:var(--muted);">Scanning local network &amp; Bluetooth...</div>
     </div>
 
     <div class="grid">
@@ -349,6 +376,83 @@
       }).join('');
     }
 
+    async function loadNearbyDevices() {
+      try {
+        const res = await fetch('/api/v1/nearby/devices');
+        const data = await res.json();
+        document.getElementById('hostLanIp').textContent =
+          `Host LAN IPs: ${data.host_lan_ips.join(', ')} | UDP Broadcast Port: ${data.udp_broadcast_port} | Active SSE Clients: ${data.active_sse_subscribers}`;
+        const listEl = document.getElementById('nearbyDevicesList');
+        if (!data.discovered_devices.length) {
+          listEl.textContent = 'No active neighbor devices detected in ARP/Bluetooth cache.';
+          return;
+        }
+        listEl.innerHTML = '<strong>Discovered Nearby Devices (' + data.discovered_devices.length + '):</strong> ' +
+          data.discovered_devices.map(d =>
+            `<span style="display:inline-block;background:#0f1420;border:1px solid var(--border);padding:0.2rem 0.55rem;border-radius:0.4rem;margin:0.2rem;">
+              ${d.ip_address || d.hostname || d.device_id} <small style="color:var(--accent);">[${d.interface || d.discovery_method} • ${d.state}]</small>
+            </span>`
+          ).join('');
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function broadcastNearbyAlert() {
+      const reportEl = document.getElementById('broadcastReport');
+      const customMsg = document.getElementById('customAlertMsg').value.trim();
+      reportEl.textContent = 'Broadcasting alert across UDP LAN, SSE Stream, Webhooks, and Host Desktop...';
+      try {
+        const res = await fetch('/api/v1/nearby/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            custom_message: customMsg || null,
+            min_probability_threshold: 0.0,
+            udp_port: 50505,
+            include_desktop_notify: true
+          })
+        });
+        const data = await res.json();
+        const summary = data.delivery_results.map(r => `${r.channel}: ${r.status} (${r.targets_reached} targets)`).join(' • ');
+        reportEl.textContent = `✓ Broadcast Complete — ${summary}`;
+        loadNearbyDevices();
+      } catch (err) {
+        reportEl.textContent = 'Broadcast error: ' + err.message;
+      }
+    }
+
+    function enableBrowserNotifications() {
+      if (!('Notification' in window)) {
+        alert('Browser notifications are not supported.');
+        return;
+      }
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') {
+          new Notification('⚡ Raiden Grid Watch Active', {
+            body: 'This device will now receive instant power cut & severe weather alerts over the local network.'
+          });
+        }
+      });
+    }
+
+    function connectSseStream() {
+      const evtSource = new EventSource('/api/v1/nearby/stream');
+      evtSource.addEventListener('alert', e => {
+        try {
+          const alertData = JSON.parse(e.data);
+          const banner = document.getElementById('liveAlertBanner');
+          banner.style.display = 'block';
+          banner.innerHTML = `<strong>${alertData.title}</strong><br/>${alertData.message}`;
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification(alertData.title, { body: alertData.message });
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      });
+    }
+
     function loadAutoIp() { fetchTelemetry(''); }
     function loadByCity() {
       const c = document.getElementById('cityInput').value.trim();
@@ -366,6 +470,8 @@
     }
 
     loadAutoIp();
+    loadNearbyDevices();
+    connectSseStream();
   </script>
 </body>
 </html>

@@ -1,20 +1,37 @@
 """FastAPI entry point for the Raiden Grid & Weather Telemetry REST API."""
 
+import asyncio
 from datetime import datetime, timezone
+import json
 from pathlib import Path
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Query
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from app.config import settings
 from app.schemas import (
     LocationData,
+    NearbyDiscoveryResponse,
+    NotifyNearbyRequest,
+    NotifyNearbyResponse,
+    PeerWebhookCreate,
+    PeerWebhookRecord,
     PowerCutPredictionResponse,
     UnifiedStatusResponse,
     WeatherResponse,
 )
 from app.services.device_power import get_device_power_status
 from app.services.location import detect_device_location
+from app.services.nearby import (
+    broadcast_nearby_notification,
+    discover_nearby_devices,
+    get_recent_alerts,
+    list_peer_webhooks,
+    register_peer_webhook,
+    remove_peer_webhook,
+    subscribe_sse,
+    unsubscribe_sse,
+)
 from app.services.predictor import generate_power_cut_prediction
 from app.services.weather import fetch_weather_for_location
 
@@ -25,10 +42,11 @@ app = FastAPI(
     version=settings.app_version,
     description=(
         "REST API that automatically detects the host laptop's geographic location, "
-        "retrieves real-time & 24-hour meteorological conditions, and calculates the "
-        "probability of power cuts using deterministic weather-grid modeling, public "
-        "knowledge (Google News RSS utility advisories), regional grid zones (CEB/LECO), "
-        "and local hardware power telemetry."
+        "retrieves real-time & 24-hour meteorological conditions, calculates the "
+        "probability of power cuts using deterministic weather-grid modeling and public "
+        "knowledge (Google News RSS utility advisories & CEB/LECO grid zones), and "
+        "discovers & notifies nearby devices via UDP LAN Broadcast, SSE Live Streams, "
+        "Peer Webhooks, and Desktop Notifications."
     ),
     docs_url="/docs",
     redoc_url="/redoc",
@@ -60,6 +78,10 @@ async def root_dashboard():
                 "/api/v1/weather",
                 "/api/v1/power-cuts",
                 "/api/v1/status",
+                "/api/v1/nearby/devices",
+                "/api/v1/nearby/notify",
+                "/api/v1/nearby/stream",
+                "/api/v1/nearby/peers",
             ],
         }
     )
@@ -152,3 +174,98 @@ async def get_unified_status(
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to compute unified status: {exc}") from exc
+
+
+@app.get("/api/v1/nearby/devices", response_model=NearbyDiscoveryResponse, tags=["Nearby Device Notifications"])
+async def get_nearby_devices() -> NearbyDiscoveryResponse:
+    """
+    Discover nearby devices on the local Wi-Fi/LAN subnet (`ip neigh` ARP table),
+    Bluetooth radio (`bluetoothctl`), and registered webhook peers.
+    """
+    return discover_nearby_devices()
+
+
+@app.post("/api/v1/nearby/peers", response_model=PeerWebhookRecord, tags=["Nearby Device Notifications"])
+async def create_nearby_peer(payload: PeerWebhookCreate) -> PeerWebhookRecord:
+    """
+    Register a nearby device webhook endpoint (e.g., another laptop, phone, Raspberry Pi,
+    Home Assistant, or ntfy server on the LAN) to receive HTTP POST power-cut & weather alerts.
+    """
+    return register_peer_webhook(payload)
+
+
+@app.get("/api/v1/nearby/peers", response_model=List[PeerWebhookRecord], tags=["Nearby Device Notifications"])
+async def get_nearby_peers() -> List[PeerWebhookRecord]:
+    """List all registered nearby device webhook endpoints."""
+    return list_peer_webhooks()
+
+
+@app.delete("/api/v1/nearby/peers/{peer_id}", tags=["Nearby Device Notifications"])
+async def delete_nearby_peer(peer_id: str):
+    """Unregister a nearby peer webhook endpoint by ID."""
+    if not remove_peer_webhook(peer_id):
+        raise HTTPException(status_code=404, detail=f"Peer '{peer_id}' not found")
+    return {"status": "deleted", "peer_id": peer_id}
+
+
+@app.post("/api/v1/nearby/notify", response_model=NotifyNearbyResponse, tags=["Nearby Device Notifications"])
+async def notify_nearby_devices(
+    payload: NotifyNearbyRequest = NotifyNearbyRequest(),
+    lat: Optional[float] = Query(None, ge=-90.0, le=90.0, description="Optional latitude override"),
+    lon: Optional[float] = Query(None, ge=-180.0, le=180.0, description="Optional longitude override"),
+    city: Optional[str] = Query(None, description="Optional city/town name override"),
+) -> NotifyNearbyResponse:
+    """
+    Fetch live weather & power cut predictions and broadcast an alert to all nearby devices across:
+    1. **UDP LAN Broadcast & Direct Unicast** (`255.255.255.255` + subnet broadcast + discovered ARP neighbor IPs on port `50505`)
+    2. **Real-Time SSE Stream** (`/api/v1/nearby/stream` for connected mobile/laptop web browsers and CLI listeners)
+    3. **Registered Peer Webhooks** (`/api/v1/nearby/peers`)
+    4. **Host Desktop Notification** (`notify-send`)
+    """
+    try:
+        location = await detect_device_location(lat=lat, lon=lon, city=city)
+        weather = await fetch_weather_for_location(location)
+        prediction = await generate_power_cut_prediction(location, weather)
+        return await broadcast_nearby_notification(prediction, payload)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to broadcast nearby alert: {exc}") from exc
+
+
+@app.get("/api/v1/nearby/alerts", tags=["Nearby Device Notifications"])
+async def list_recent_nearby_alerts():
+    """Return the recent alert history broadcast to nearby devices."""
+    return {"count": len(get_recent_alerts()), "alerts": get_recent_alerts()}
+
+
+@app.get("/api/v1/nearby/stream", tags=["Nearby Device Notifications"])
+async def stream_nearby_alerts(request: Request):
+    """
+    Server-Sent Events (SSE) live stream for nearby devices on the Wi-Fi/LAN.
+    Nearby phones or laptops can connect via browser or `curl -N http://<laptop-lan-ip>:8000/api/v1/nearby/stream`
+    to receive instant push notifications when a power cut or severe weather alert is triggered.
+    """
+    queue = subscribe_sse()
+
+    async def event_generator():
+        try:
+            yield f"event: connected\ndata: {json.dumps({'status': 'subscribed', 'timestamp_utc': datetime.now(timezone.utc).isoformat()})}\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    alert = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    yield f"event: alert\ndata: {json.dumps(alert)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            unsubscribe_sse(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

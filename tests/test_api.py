@@ -1,4 +1,4 @@
-"""Unit and integration tests for the Weather & Power-Cut Prediction REST API."""
+"""Unit and integration tests for the Weather, Power-Cut Prediction, and Nearby Device Notification REST API."""
 
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -28,10 +28,11 @@ def test_health_endpoint():
 
 
 def test_dashboard_root():
-    """Verify root endpoint serves the HTML telemetry dashboard."""
+    """Verify root endpoint serves the HTML telemetry dashboard with Nearby Broadcast controls."""
     response = client.get("/")
     assert response.status_code == 200
     assert "Raiden Grid" in response.text
+    assert "Nearby Devices Discovery" in response.text
 
 
 def test_wmo_weather_decoder():
@@ -137,6 +138,59 @@ def test_device_power_mock_sysfs(tmp_path: Path):
     assert status.battery_percent == 78
     assert status.battery_status == "Discharging"
     assert status.local_outage_suspected is True
+
+
+def test_nearby_devices_and_peer_registration():
+    """Verify nearby LAN/Bluetooth discovery and peer webhook CRUD endpoints."""
+    dev_resp = client.get("/api/v1/nearby/devices")
+    assert dev_resp.status_code == 200
+    dev_data = dev_resp.json()
+    assert "host_lan_ips" in dev_data
+    assert "discovered_devices" in dev_data
+
+    # Register a nearby peer webhook
+    peer_resp = client.post(
+        "/api/v1/nearby/peers",
+        json={
+            "name": "Nearby Arch Laptop",
+            "callback_url": "http://192.168.1.41:9000/webhook",
+            "min_risk_probability": 10.0,
+        },
+    )
+    assert peer_resp.status_code == 200
+    peer_id = peer_resp.json()["peer_id"]
+
+    list_resp = client.get("/api/v1/nearby/peers")
+    assert list_resp.status_code == 200
+    assert any(p["peer_id"] == peer_id for p in list_resp.json())
+
+    del_resp = client.delete(f"/api/v1/nearby/peers/{peer_id}")
+    assert del_resp.status_code == 200
+
+
+def test_nearby_notification_broadcast():
+    """Verify POST /api/v1/nearby/notify broadcasts across UDP LAN, SSE, and records alert history."""
+    notify_resp = client.post(
+        "/api/v1/nearby/notify",
+        json={
+            "custom_message": "Automated test broadcast to nearby LAN devices",
+            "min_probability_threshold": 0.0,
+            "udp_port": 50505,
+            "include_desktop_notify": False,
+        },
+    )
+    assert notify_resp.status_code == 200
+    data = notify_resp.json()
+    assert data["triggered"] is True
+    assert "alert_title" in data
+    channels = {r["channel"]: r for r in data["delivery_results"]}
+    assert "udp_lan_broadcast" in channels
+    assert channels["udp_lan_broadcast"]["status"] == "delivered"
+    assert "sse_live_stream" in channels
+
+    alerts_resp = client.get("/api/v1/nearby/alerts")
+    assert alerts_resp.status_code == 200
+    assert alerts_resp.json()["count"] >= 1
 
 
 def test_live_api_endpoints():

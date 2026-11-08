@@ -1,4 +1,4 @@
-"""Pydantic v2 data schemas for Location, Weather, Public Intel, and Power Cut Predictions."""
+"""Pydantic v2 data schemas for Location, Weather, Public Intel, Power Cut Predictions, and Nearby Device Notifications."""
 
 from typing import List, Optional
 from pydantic import BaseModel, Field
@@ -170,3 +170,86 @@ class UnifiedStatusResponse(BaseModel):
     location: LocationData
     weather: WeatherResponse
     power_cut_prediction: PowerCutPredictionResponse
+
+
+class NearbyDevice(BaseModel):
+    """A nearby device discovered via LAN ARP table, mDNS, Bluetooth, or webhook registration."""
+
+    device_id: str = Field(..., description="Unique identifier (IP address, MAC address, or peer ID)")
+    ip_address: Optional[str] = Field(None, description="IPv4/IPv6 address on LAN or Tailscale mesh")
+    mac_address: Optional[str] = Field(None, description="Hardware MAC / Bluetooth address")
+    hostname: Optional[str] = Field(None, description="Resolved hostname or Bluetooth device name")
+    interface: Optional[str] = Field(None, description="Network or radio interface (e.g., wlo1, tailscale0, bluetooth)")
+    discovery_method: str = Field(..., description="How the device was found (lan_arp, bluetooth, registered_peer)")
+    state: str = Field(..., description="Reachability or connection status (REACHABLE, STALE, PAIRED, REGISTERED)")
+
+
+class NearbyDiscoveryResponse(BaseModel):
+    """Summary of the host's local network interfaces and all discovered nearby devices."""
+
+    host_lan_ips: List[str] = Field(default_factory=list, description="Local LAN/Wi-Fi IPv4 addresses of this laptop")
+    subnet_broadcast_ips: List[str] = Field(default_factory=list, description="Subnet broadcast addresses")
+    sse_stream_url: str = Field(..., description="Real-time SSE alert stream URL for nearby devices")
+    udp_broadcast_port: int = Field(50505, description="UDP port used for LAN broadcast alert packets")
+    discovered_devices: List[NearbyDevice] = Field(default_factory=list)
+    active_sse_subscribers: int = Field(0, description="Number of nearby browser/SSE clients currently listening")
+
+
+class PeerWebhookCreate(BaseModel):
+    """Request payload to register a nearby device webhook endpoint for power cut notifications."""
+
+    name: str = Field(..., description="Friendly name of the nearby device (e.g., 'Living Room Pi', 'Android Phone')")
+    callback_url: str = Field(..., description="HTTP/HTTPS URL on the nearby device to receive POST alert payloads")
+    min_risk_probability: float = Field(
+        0.0, ge=0.0, le=100.0, description="Minimum power cut probability (%) required to trigger this peer"
+    )
+
+
+class PeerWebhookRecord(PeerWebhookCreate):
+    """Registered nearby peer webhook record."""
+
+    peer_id: str
+    registered_at: str
+
+
+class NotifyNearbyRequest(BaseModel):
+    """Configuration for triggering a nearby device notification broadcast."""
+
+    custom_message: Optional[str] = Field(
+        None, description="Optional custom alert message to include alongside live weather & power cut telemetry"
+    )
+    min_probability_threshold: float = Field(
+        0.0,
+        ge=0.0,
+        le=100.0,
+        description="Only broadcast if current or 24h peak power cut probability is at least this percentage (0 = always send)",
+    )
+    udp_port: int = Field(50505, ge=1024, le=65535, description="Target UDP port for LAN broadcast & unicast packets")
+    include_desktop_notify: bool = Field(
+        True, description="Also trigger a native Linux desktop notification (notify-send) on the host laptop"
+    )
+
+
+class ChannelDeliveryResult(BaseModel):
+    """Delivery report for a specific notification channel."""
+
+    channel: str = Field(..., description="Channel name (udp_lan_broadcast, sse_live_stream, peer_webhooks, host_desktop)")
+    status: str = Field(..., description="delivered, skipped, or failed")
+    targets_reached: int = Field(0, description="Number of nearby endpoints/devices reached on this channel")
+    details: str = Field(..., description="Human-readable summary of delivery")
+
+
+class NotifyNearbyResponse(BaseModel):
+    """Complete result of broadcasting a weather & power cut alert to nearby devices."""
+
+    triggered: bool = Field(..., description="True if the alert met the threshold and was broadcast")
+    timestamp_utc: str
+    alert_severity: str = Field(..., description="LOW, MODERATE, HIGH, or CRITICAL")
+    alert_title: str
+    alert_message: str
+    location_city: str
+    current_outage_probability_percent: float
+    peak_24h_probability_percent: float
+    highest_risk_hour: Optional[str] = None
+    discovered_nearby_devices: List[NearbyDevice]
+    delivery_results: List[ChannelDeliveryResult]
